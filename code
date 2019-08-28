@@ -1,0 +1,707 @@
+"""
+Created on Mon Mar 11 15:18:23 2019
+
+@author: annagriffith
+"""
+
+# Import relevent libraries
+import numpy as np
+import scipy
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib import cm
+
+
+
+# Finite differences solution with either Jacobi or Gauss-Seidel method
+def Laplace(method, maxIter, a, d):
+    '''
+    Inputs-
+    Method: J (Jacobi) or GS (Gauss-Siedel)
+    maxIter: maximum number of iterations to run through, will stop short if 
+             converged
+    a: length of capacitor
+    d: distance between plates
+    
+    Returns-
+    Vt: Matrix of potential field values
+    Ex: Matrix of electric field in x-direction
+    Ey: Matrix of electric field in y-direction
+    E: Matrix of magnitude of electric field
+    test: True or False, whether solution has passed E=V/d test
+    Nx: Number of grid points in x-direction
+    Ny: Number of grid points in y-direction
+    Lx: Total length of grid in x-direction (m)
+    Ly: Total length of grid in y-direction (m)
+    '''
+    print('a = ',a,'m')
+    print('d = ',d,'m')
+    print('Voltage across capacitor = 200V\n')
+    # Set grid size and spacing
+    Lx = int(5*d)
+    Ly = int(2*a)
+    Nx = Lx
+    Ny = Ly   
+    
+    x = np.linspace(0, Lx, Nx)
+    dx = x[1] - x[0]
+    y = np.linspace(0, Ly, Ny)
+    dy = y[1] - y[0]
+         
+    # Initial guess of interior grid
+    Vguess = 0   
+    V = np.empty((Nx, Ny))
+    V.fill(Vguess)
+    
+    
+    # Set Boundary conditions, 0 at edges of grid
+    V[(Ny-1):, :] = 0
+    V[:1, :] = 0
+    V[:, (Nx-1):] = 0
+    V[:, :1] = 0
+    
+    # Set array for error values
+    norm_error = np.zeros(maxIter)
+    
+    for iteration in range(0, maxIter):
+
+        # Set potential at plates of capacitor after each iteration
+        V_right = 100
+        V_left = -100
+              
+        V[int(3*d/dx),int(0.5*a/dy):int(1.5*a/dy)] = V_right
+        V[int(2*d/dx),int(0.5*a/dy):int(1.5*a/dy)] = V_left
+        V_old = np.copy(V)
+        
+        # vectorised Gauss-Seidel and Jacobi methods
+        if method == "GS":                    
+            V[1:-1, 1:-1] = 0.25 * (V[1:-1, 2:] + V[1:-1, 0:-2] 
+            + V[2:,1: -1] + V[0:-2, 1:-1])
+
+        if method == "J":        
+            V[1:-1, 1:-1] = 0.25 * (V_old[1:-1, 2:] + V_old[1:-1, 0:-2] 
+            + V_old[2:,1: -1] + V_old[0:-2, 1:-1])
+
+        # Calculate normalised change in V after each iteration
+        change = np.absolute(V - V_old)
+        magnitude = np.absolute(V)
+        norm_error[iteration] = np.sum(change)/(np.sum(magnitude))
+
+        # Break if system has converged, continue if not
+        if norm_error[iteration] < 10**-2: 
+            print('System has converged after ', iteration, ' iterations')
+            break
+            
+        else:
+            continue
+        
+    # Transpose for proper x-y orientation
+    Vt = np.matrix.transpose(V)
+    
+    # Calculate electric field values
+    Ex, Ey = np.gradient(V)
+    Ex = np.matrix.transpose(np.zeros((Nx, Ny)) - Ex)
+    Ey = np.matrix.transpose(np.zeros((Nx, Ny)) - Ey)
+    E = np.sqrt(Ex**2 + Ey**2)
+
+    # Returns True if E values are correct, False if not
+    test = Test_Laplace(E, V_right-V_left, d, dy, Nx, a)
+
+    if test == False:
+        print('Solution did not converge to correct values'
+              '\nTry adjusting grid spacing')
+
+    return Vt, Ex, Ey, E, test, Nx, Ny, Lx, Ly
+
+# Test function for Laplace
+def Test_Laplace(E,V_capacitor,d, dy, Nx, a):
+    '''
+    Inputs -
+    E: Electric field matrix
+    V_capacitor: Voltage between plates of capacitor
+    d: Distance between plates of capacitor
+    dy: Grid spacing in y-direction
+    Nx: number of grid points in x-direction
+    a: length of capacitor plates
+    
+    Returns_
+    True if test is passed, False if not
+    '''
+    half_X = int(Nx/2)
+    # Computes average value of electric field in middle of capacitor plates
+    E_center = np.average(E[int(0.6*a/dy):int(1.4*a/dy), half_X])
+    # Compares to correct value of E = V/d
+    if abs(E_center - (V_capacitor/d)) < 10**-2:
+        return True
+    else:
+        return False
+
+# Computes solutions for 1D diffusion equation
+def Diffusion_1d(material, maxtime, temp_furnace, temp_ice, convergence):
+    '''
+    Inputs-
+    material: 'air' for bar with one end in air, 'ice' for one end in infinite
+               ice bath
+    maxtime: Maximum time to run for, stops short if equilibrium is reached
+    temp_furnace: Temperature of the furnace in Kelvin
+    temp_ice: Temperature of the ice in Kelvin
+    convergence: 'True' if you want to tst for convergence, 'False' if not
+    
+    Returns- 
+    temp_array: array of temperatures along bar for each timestep
+    equilibrium: whether the system has reached equilibrium at each timestep
+    x: array of x-grid points
+    dt = spacing in time array
+    '''
+    
+    # Set grid size and spacing
+    L = 0.52        
+    T = maxtime
+    
+    Nx = 53
+    Nt = int(T/10)
+    x = np.linspace(0, L, Nx)    
+    dx = x[1] - x[0]
+    t = np.linspace(0, T, Nt)    
+    dt = t[1] - t[0]
+    
+    u  = np.zeros(Nx)           # unknown u at new time level
+    un = np.zeros(Nx) 
+    temp_array = np.zeros((Nx, Nt)) 
+    
+    # Set constants
+    diffusivity = 59/(450*7900)    
+    F = diffusivity*dt/(dx**2)      # Mesh fourier number
+    temp_room = 293.15
+     
+    # Compute sparse matrix
+    diagonal  = np.zeros(Nx)
+    bottom = np.zeros(Nx-1)
+    top = np.zeros(Nx-1)
+       
+    diagonal[:] = 1 + 2*F
+    bottom[:] = -F  
+    top[:] = -F  
+
+    A = scipy.sparse.diags(
+    diagonals=[diagonal, bottom, top],
+    offsets=[0, -1, 1], shape=(Nx, Nx),
+    format='csc')
+    
+    # Neumann boundary conditions
+    if material == 'air':
+        A[Nx-1,Nx-2] = -2*F
+
+    inv_A = scipy.sparse.linalg.inv(A)
+    
+
+    # Dirichlet BCs
+    boundary = np.zeros(Nx)
+    boundary[0] = F*temp_furnace
+    if material == 'ice':
+        boundary[Nx-1] = F*temp_ice
+
+    
+    # Set initial conditions
+    un.fill(temp_room)
+    un[0] = temp_furnace
+    if material == 'ice':
+        un[Nx-1] = temp_ice
+    
+    # Set arrays for temp difference between iterations and equilibrium values   
+    norm_change = np.zeros(Nt+1)
+    equilibrium = [True] * (Nt+1)
+       
+    for n in range(Nt):
+        
+        # Calculate new temp values
+        u = inv_A.dot(un + boundary)
+         
+        # Calculate normalised change between iterations
+        change =  np.absolute(u - un)
+        magnitude = np.absolute(un)
+        norm_change[n] = np.sum(change)/(np.sum(magnitude))
+
+        # Check for convergence
+        if convergence == True:
+            if norm_change[n] < 10**-6: #do testing to find appropriate value
+                
+                print('\n\nSystem has reached equilibrium at ', dt*n, 's')
+                break
+                
+            else:
+            
+                equilibrium[n] = False
+                temp_array[:,n] = u
+                un = u  
+
+        if convergence == False:   
+            temp_array[:,n] = u
+            un = u 
+                
+    return temp_array, equilibrium, norm_change, x, dt
+
+# Test function for 1D diffusion 
+def Test_Diffusion(material, time):
+    '''
+    Inputs-
+    material: 'ice' or 'air'
+    time: Time to rum test function for
+    
+    Returns-
+    True if test is passed, False if not 
+    '''
+    # Calculates temperature distribution with temp of ice = temp of furnace
+    # = temp of room, array should be flat with values temp_room
+    flat_array,_ ,_ ,_ , _= Diffusion_1d(material, time,  293.15, 
+                                   293.15, convergence = False)
+
+    # Calculates average value of array and comapres to room temp
+    average = np.mean(flat_array)
+    if abs(average - 293.15) < 10**-6:
+        return True
+    else:
+        return False
+
+# Computes solution for 2D diffusion equation
+def Diffusion_2d(maxtime, material, temp_furnace, temp_ice, convergence):
+    '''
+    Inputs-
+    maxtime: Maximum time to run for, stops short if equilibrium is reached
+    material: 'air' for bar with one end in air, 'ice' for one end in infinite
+               ice bath
+    temp_furnace: Temperature of the furnace in Kelvin
+    temp_ice: Temperature of the ice in Kelvin
+    convergence: 'True' if you want to tst for convergence, 'False' if not
+    
+    Returns-
+    u: Array of tempuratures across grid
+    dx: Grid spacing along x-direction
+    dy: Grid spacing along y-direction
+    Nx: number of grid points in x-direction
+    Ny: number of grid points in y-direction
+    final_time: final time simulation is run through
+    '''
+    
+    if material == 'block':
+        Nx = 51
+        Lx = 1.0
+        Ny = 51
+        Ly = 1.0
+        Nt = int(maxtime/0.1)
+        
+    else:
+        Nx = 27
+        Lx = 0.52
+        Ny = 27
+        Ly = 0.52
+        Nt = int(maxtime/6)
+
+    x = np.linspace(0, Lx, Nx)
+    y = np.linspace(0, Ly, Ny)
+    t = np.linspace(0, maxtime, Nt)   
+    dx = x[1] - x[0]
+    dy = y[1] - y[0]
+    dt = t[1] - t[0]
+    
+    
+    u = np.zeros((Ny, Nx))  
+    un = np.zeros((Ny, Nx))
+    
+    # Set constants
+    temp_room = 293.15
+    diffusivity_iron = 59/(450*7900)
+    diffusivity_air = 1.9*10**-5
+    diffusivity_ice = 8.4*10**-4
+
+    u.fill(temp_room)
+
+    if material == 'block':
+        # Plot for 25cm of poker in furnace and  10cm in ice
+        u[:, 0:25] = temp_ice
+        u[:12, :30] = temp_ice
+        u[37:, :30] = temp_ice
+        u[:, -1] = temp_furnace
+        u[:12, 37:] = temp_furnace
+        u[37:, 37:] = temp_furnace
+    
+    else:   
+        # 25cm of poker in furnace
+        u[:, -1] = temp_furnace
+        u[0, 13:] = temp_furnace
+        u[-1, 13:] = temp_furnace
+        
+        if material == 'ice' :
+            # 10cm of poker in ice
+            u[:, 0] = temp_ice
+            u[0, :5] = temp_ice
+            u[-1, :5] = temp_ice
+
+    
+    norm_change = np.zeros(Nt)
+
+    for n in range(Nt ): 
+        
+        un = u.copy()
+        
+        # Cannot vectorise forward Euler routine since diffusivity depends 
+        # on position in grid
+        if material == 'block':
+            for i in range(Ny):
+                for j in range(Nx):
+                    
+                    # Set diffusivity for each i,j value
+                    diffusivity = diffusivity_air
+                    
+                    if j <= 60:
+                        diffusivity = diffusivity_ice
+                        
+                    if j >= 50 and (i >= 25 or i<= 75):
+                        diffusivity = diffusivity_iron
+                    
+                    # Mesh fourier numbers
+                    Fx = diffusivity*dt/(dx**2)
+                    Fy = diffusivity*dt/(dy**2)
+
+                    # Calculate non-boundary points
+                    if i != 0 and i!= Ny-1:
+                        if j!= 0 and j!= Ny-1:
+                            u[i, j] = (un[i,j] + 
+                                 Fx * 
+                                 (un[i+1, j] - 2 * un[i, j] + un[i-1, j]) +
+                                 Fy * 
+                                 (un[i,j+1] - 2 * un[i, j] + un[i, j-1]))
+        
+        # Air and infinite ice block cases                  
+        else:
+            diffusivity = diffusivity_iron
+       
+            Fx = diffusivity*dt/(dx**2)
+            Fy = diffusivity*dt/(dy**2)
+    
+            # Vectorised forward Euler routine
+            u[1:-1, 1:-1] = (un[1:-1,1:-1] + 
+                    Fx * 
+                    (un[1:-1, 2:] - 2 * un[1:-1, 1:-1] + un[1:-1, 0:-2]) +
+                    Fy * 
+                    (un[2:,1: -1] - 2 * un[1:-1, 1:-1] + un[0:-2, 1:-1]))
+
+        if material == 'block':
+            #Dirichlet BCs at all edges
+            u[-1, 30:45] = temp_room
+            u[0, 30:45] = temp_room
+            u[-1, 0:30] = temp_ice
+            u[0, 0:30] = temp_ice
+            u[:, 0] = temp_ice
+            u[:, -1] = temp_furnace
+            u[:12, 37:] = temp_furnace
+            u[37:, 37:] = temp_furnace 
+        else:   
+            #Neumann boundary conditions along given ranges
+            if material == 'air' :
+                neumann_irange = np.arange(0, Ny)
+                neumann_jrange = np.arange(0, Nx)
+            
+            if material == 'ice' :
+                neumann_irange = [0, Ny-1]
+                neumann_jrange = np.arange(5, 13)
+            
+            for i in neumann_irange:
+                for j in neumann_jrange:
+                    
+                    #Neumann boundary conditions
+                    if j == 0 and i > 0  and i != Ny-1:
+                        u[i, j] = (un[i,j] + 
+                                Fx * 
+                                (un[i+1, j] - 2 * un[i, j] + un[i-1, j]) +
+                                Fy * 
+                                ( 2 * un[i,j+1] - 2 * un[i, j] ))
+                    if j == 0 and i == 0 :
+                        u[i, j] = (un[i,j] + 
+                                Fx * 
+                                ( 2 * un[i+1, j] - 2 * un[i, j]) +
+                                Fy * 
+                                ( 2 * un[i,j+1] - 2 * un[i, j] ))
+                    if i == 0 and j > 0 and j != Nx-1:
+                        u[i, j] = (un[i,j] + 
+                                Fx * 
+                                (2 * un[i+1, j] - 2 * un[i, j]) +
+                                Fy * 
+                                (un[i,j+1] - 2 * un[i, j] + un[i, j-1]))
+                    if i == Ny-1 and j == 0 :
+                        u[i, j] = (un[i,j] + 
+                                Fx * 
+                                ( 2 * un[i-1, j] - 2 * un[i, j]) +
+                                Fy * 
+                                ( 2 * un[i,j+1] - 2 * un[i, j] ))
+                    if i == Ny-1 and j > 0 and j != Nx-1:    
+                        u[i, j] = (un[i,j] + 
+                                Fx * 
+                                (2 * un[i-1, j] - 2 * un[i, j]) +
+                                Fy * 
+                                (un[i,j+1] - 2 * un[i, j] + un[i, j-1]))
+                    if j == Nx-1 and i > 0 and i != Ny-1:
+                        u[i, j] = (un[i,j] + 
+                                Fx * 
+                                (un[i+1, j] - 2 * un[i, j] + un[i-1, j]) +
+                                Fy * 
+                                ( 2 * un[i,j-1] - 2 * un[i, j] ))
+    
+    
+            #Dirichlet BCs at furnace end
+            u[0, 13:] = temp_furnace
+            u[-1, 13:] = temp_furnace
+            u[:, -1] = temp_furnace
+                        
+            if material == 'ice':
+                #Dirichlet BCs at ice end
+                u[:, 0] = temp_ice
+                u[0, :5] = temp_ice
+                u[-1, :5] = temp_ice
+
+        # Calculate change between successive iterations           
+        change =  np.absolute(u - un)
+        magnitude = np.absolute(un)
+        norm_change[n] =  np.sum(change)/(np.sum(magnitude) )
+
+        # Check for convergence
+        if convergence == True:
+            if norm_change[n] < 10**-5: #do testing to find appropriate value
+    
+                print('\nSystem has reached equilibrium at ', dt*n, 's')
+                final_time = dt*n
+                break
+        
+            else:
+                final_time = dt*n
+                continue
+    
+        if convergence == False:
+            final_time = maxtime
+            
+    return u, dx, dy, Nx, Ny, final_time
+
+
+# Test function for 2D diffusion equation
+def Test_Diffusion2d(material, time):
+    '''
+    Inputs-
+    material: 'ice' or 'air'
+    time: Time to rum test function for
+    
+    Returns-
+    True if test is passed, False if not 
+    '''
+    # Calculates temperature distribution with temp of ice = temp of furnace
+    # = temp of room, array should be flat with values temp_room
+    flat_array,_ ,_ ,_ ,_ ,_  = Diffusion_2d( time, material, 293.15,
+                                   293.15, convergence = False)
+
+    # Calculates average value and compares to room temp
+    average = np.mean(flat_array)
+    if abs(average - 293.15) < 10**-6:
+        return True
+    else:
+        return False
+
+
+print("########## Task 1 Plots: Poisson's equation ##########\n\n")
+
+#  Values for Task 1     
+V, Ex, Ey, E, test , Nx ,Ny, Lx, Ly= Laplace('J', 2000, 100, 10)
+
+# Don't plot if test is not passed
+if test == True:
+    # Set colour interpolation and colour map
+    colorinterpolation = 50
+    colourMap = plt.cm.jet 
+    # Set meshgrid
+    X, Y = np.meshgrid(np.linspace(0, Lx, Nx), np.linspace(0, Ly, Ny))
+    
+
+    # Potential field contour
+    plt.title("Contour of Potential")
+    plt.contourf(X, Y, V, colorinterpolation, cmap=colourMap)
+    plt.colorbar(label = 'Potential (V)')
+    plt.xlabel("x (m)")
+    plt.ylabel("y (m)")
+    plt.show()
+    
+    # Electric field contour
+    plt.title("Contour of Electric Field")
+    plt.contourf(X, Y, E, colorinterpolation, cmap=colourMap)
+    plt.colorbar(label = 'Magnitude of electric field (V/m) ')
+    plt.xlabel("x (m)")
+    plt.ylabel("y (m)")
+    plt.show()
+
+    # Plots E field through center of capacitor
+    plt.title("Magnitude of electric field through center of capacitor")
+    half_X = int(Nx/2)
+    y = np.arange(0,Ny)
+    plt.plot(y, E[:, half_X])
+    plt.xlabel("x (m)")
+    plt.ylabel("Electric field (V/m)")
+    plt.show()
+    
+    # Electric field lines around capacitor
+    Y, X = np.mgrid[0:Ny, 0:Nx]
+    fig = plt.figure(figsize=(14, 18))
+    gs = gridspec.GridSpec(nrows=3, ncols=2, height_ratios=[1, 1, 2])
+    ax0 = fig.add_subplot(gs[0, 0])
+    strm = ax0.streamplot(X, Y, Ex, Ey, color=E, linewidth=2, cmap=colourMap)
+    fig.colorbar(strm.lines, label = 'Magnitude of electric field (V/m) ' )
+    ax0.set_title("Electric Field Lines")
+    ax0.set_xlabel('x (m)')
+    ax0.set_ylabel('y (m)')
+    plt.show()
+
+print("########## Task 2 Plots: 1D diffusion equation ##########\n\n")
+print("1D temperature distribution: air")      
+oneD_air_test = Test_Diffusion('air', 1800)
+
+# Don't plot if test is not passed
+if oneD_air_test == False:
+    print('Solution did not converge to correct values'
+          '\nTry adjusting grid spacing')
+
+if oneD_air_test == True:
+    
+    temperature, equilibrium, norm_change, x, dt = Diffusion_1d('air', 18001,
+                                    1273.15, 273.15, convergence = True)
+    
+    # Times in seconds to plot as comparisons
+    time_array = [60, 300, 1200, 6000, 18000]
+    label_array = ['1 minute', '5 minutes', '20 minutes',
+                   '100 minutes' , '300 minutes']
+    for times, label in zip(time_array,label_array):
+        if equilibrium[int(times/dt)] == False :
+            plot = np.transpose(temperature[:, int(times/dt)])
+            plt.plot(x, plot, label = label)
+        
+    # Plot comparison of temperature distribution along bar for different times
+    plt.title('1D plot of temperature of the bar with one end in air')
+    plt.xlabel('x (m)')  
+    plt.ylabel('Temperature (K)') 
+    plt.legend()
+    plt.show()
+
+
+print("\n\n1D temperature distribution: ice")
+
+oneD_ice_test = Test_Diffusion('ice', 1800)
+
+# Don't plot if test is not passed
+if oneD_ice_test == False:
+    print('Solution did not converge to correct values'
+          '\nTry adjusting grid spacing')
+
+if oneD_ice_test == True:
+    
+    temperature, equilibrium, norm_change, x, dt = Diffusion_1d('ice', 18001,
+                                    1273.15, 273.15, convergence = True)
+    
+    #times in seconds to plot as comparisons
+    time_array = [60, 300, 1200, 6000, 18000]
+    label_array = ['1 minute', '5 minutes', '20 minutes',
+                   '100 minutes' , '300 minutes']
+    for times, label in zip(time_array,label_array):
+        if equilibrium[int(times/dt)] == False :
+            plot = np.transpose(temperature[:, int(times/dt)])
+            plt.plot(x, plot, label = label)
+        
+    # Plot comparison of temperature distribution along bar for different times
+    plt.title('1D plot of temperature of the bar with one end in ice')
+    plt.xlabel('x (m)')  
+    plt.ylabel('Temperature (K)') 
+    plt.legend()
+    plt.show()
+
+print("########## Task 2 extension plots: 2D diffusion equation ##########")
+print("\n\n2D temperature distribution: air\n\n")
+
+twoD_air_test = Test_Diffusion2d('air', 1800)
+
+# Don't plot if test is not passed
+if twoD_air_test == False:
+    print('Solution did not converge to correct values'
+          '\nTry adjusting grid spacing')
+   
+if twoD_air_test == True: 
+    
+    # Plot 2D temp distribution in air for max time of 18000 s
+    u, dx, dy, Nx, Ny, final_time = Diffusion_2d(18000, 'air', 1273.15,
+                                       273.15, convergence = True)
+    
+
+    X2, Y2 = np.meshgrid(np.arange(0, Nx), np.arange(0, Ny))
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    surf = ax.plot_surface(0.5-dx*X2, dy*Y2, u, rstride=1, cstride=1, 
+    cmap=cm.viridis,linewidth=0, antialiased=True)
+    
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
+    ax.set_zlabel('temperature (K)')
+    ax.view_init(40, 50)
+    print('final time = ', final_time, 's')
+    plt.show()
+
+print("\n\n2D temperature distribution: infinite ice bath\n\n")
+
+twoD_ice_test = Test_Diffusion2d('ice', 1800)
+
+# Don't plot if test is not passed
+if twoD_ice_test == False:
+    print('Solution did not converge to correct values'
+          '\nTry adjusting grid spacing')
+   
+if twoD_ice_test == True: 
+    
+    # Plot 2D temp distribution in ice for max time of 18000 s    
+    u, dx, dy, Nx, Ny, final_time = Diffusion_2d(18000, 'ice', 1273.15,
+                                       273.15, convergence = True)
+    
+
+    X2, Y2 = np.meshgrid(np.arange(0, Nx), np.arange(0, Ny))
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    surf = ax.plot_surface(0.5-dx*X2, dy*Y2, u, rstride=1, cstride=1, 
+    cmap=cm.viridis,linewidth=0, antialiased=True)
+       
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
+    ax.set_zlabel('temperature (K)')
+    ax.view_init(40, 50)
+    print('final time = ', final_time, 's')
+    plt.show()
+
+print("\n\n2D temperature distribution: finite ice block\n\n")
+
+twoD_block_test = Test_Diffusion2d('block', 30)
+
+# Don't plot if test is not passed
+if twoD_block_test == False:
+    print('Solution did not converge to correct values'
+          '\nTry adjusting grid spacing')
+   
+if twoD_block_test == True: 
+    
+    # Plot 2D temp distribution in ice for max time of 30 s 
+    u, dx, dy, Nx, Ny, final_time = Diffusion_2d(30, 'block', 1273.15,
+                                       273.15, convergence = True)
+
+    # Only plot part of grid where bar is
+    X2, Y2 = np.meshgrid(np.arange(0, 25), np.arange(0, 25))
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    surf = ax.plot_surface(0.5-dx*X2, dy*Y2, u[12:37,25:50], rstride=1, 
+    cstride=1, cmap=cm.viridis,linewidth=0, antialiased=True)
+    
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
+    ax.set_zlabel('temperature (K)')
+    ax.view_init(40, 50)
+    print('final time = ', final_time, 's')
+    plt.show()
+    
